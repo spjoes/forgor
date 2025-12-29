@@ -21,6 +21,7 @@ var (
 	keySchemaVersion    = []byte("schema_version")
 	keyVaultSalt        = []byte("vault_salt")
 	keyVaultBlob        = []byte("blob")
+	keyFriendsBlob      = []byte("blob")
 	keyDeviceName       = []byte("device_name")
 	keyDevicePubKey     = []byte("device_pubkey")
 	keyDevicePrivKeyEnc = []byte("device_privkey_enc")
@@ -266,54 +267,117 @@ func (s *Store) GetDevice() (*models.Device, error) {
 }
 
 func (s *Store) SaveFriend(friend models.Friend) error {
-	data, err := json.Marshal(friend)
+	friends, err := s.GetAllFriends()
+	if err != nil {
+		friends = []models.Friend{}
+	}
+
+	found := false
+	for i, f := range friends {
+		if f.Fingerprint == friend.Fingerprint {
+			friends[i] = friend
+			found = true
+			break
+		}
+	}
+	if !found {
+		friends = append(friends, friend)
+	}
+
+	return s.saveFriends(friends)
+}
+
+func (s *Store) saveFriends(friends []models.Friend) error {
+	s.mu.RLock()
+	if s.vaultKey == nil {
+		s.mu.RUnlock()
+		return fmt.Errorf("vault is locked")
+	}
+	vaultKey := make([]byte, len(s.vaultKey))
+	copy(vaultKey, s.vaultKey)
+	s.mu.RUnlock()
+
+	plaintext, err := json.Marshal(friends)
+	if err != nil {
+		return fmt.Errorf("failed to serialize friends: %w", err)
+	}
+
+	ciphertext, err := crypto.Encrypt(vaultKey, plaintext)
 	if err != nil {
 		return err
 	}
 
 	return s.db.Update(func(tx *bolt.Tx) error {
-		friends := tx.Bucket(friendsBucket)
-		return friends.Put([]byte("friend:"+friend.Fingerprint), data)
+		bucket := tx.Bucket(friendsBucket)
+		return bucket.Put(keyFriendsBlob, ciphertext)
 	})
 }
 
 func (s *Store) GetFriend(fingerprint string) (*models.Friend, error) {
-	var friend models.Friend
-	err := s.db.View(func(tx *bolt.Tx) error {
-		friends := tx.Bucket(friendsBucket)
-		data := friends.Get([]byte("friend:" + fingerprint))
-		if data == nil {
-			return fmt.Errorf("friend not found")
+	friends, err := s.GetAllFriends()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, f := range friends {
+		if f.Fingerprint == fingerprint {
+			return &f, nil
 		}
-		return json.Unmarshal(data, &friend)
+	}
+	return nil, fmt.Errorf("friend not found")
+}
+
+func (s *Store) GetAllFriends() ([]models.Friend, error) {
+	s.mu.RLock()
+	if s.vaultKey == nil {
+		s.mu.RUnlock()
+		return nil, fmt.Errorf("vault is locked")
+	}
+	vaultKey := make([]byte, len(s.vaultKey))
+	copy(vaultKey, s.vaultKey)
+	s.mu.RUnlock()
+
+	var encryptedFriends []byte
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(friendsBucket)
+		encryptedFriends = copyBytes(bucket.Get(keyFriendsBlob))
+		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &friend, nil
-}
 
-func (s *Store) GetAllFriends() ([]models.Friend, error) {
+	if encryptedFriends == nil {
+		return []models.Friend{}, nil
+	}
+
+	plaintext, err := crypto.Decrypt(vaultKey, encryptedFriends)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt friends: %w", err)
+	}
+
 	var friends []models.Friend
-	err := s.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(friendsBucket)
-		return bucket.ForEach(func(k, v []byte) error {
-			var friend models.Friend
-			if err := json.Unmarshal(v, &friend); err != nil {
-				return err
-			}
-			friends = append(friends, friend)
-			return nil
-		})
-	})
-	return friends, err
+	if err := json.Unmarshal(plaintext, &friends); err != nil {
+		return nil, fmt.Errorf("failed to parse friends: %w", err)
+	}
+
+	return friends, nil
 }
 
 func (s *Store) DeleteFriend(fingerprint string) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
-		friends := tx.Bucket(friendsBucket)
-		return friends.Delete([]byte("friend:" + fingerprint))
-	})
+	friends, err := s.GetAllFriends()
+	if err != nil {
+		return err
+	}
+
+	newFriends := make([]models.Friend, 0, len(friends))
+	for _, f := range friends {
+		if f.Fingerprint != fingerprint {
+			newFriends = append(newFriends, f)
+		}
+	}
+
+	return s.saveFriends(newFriends)
 }
 
 func (s *Store) UpdateDeviceName(name string) error {
