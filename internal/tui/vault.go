@@ -427,7 +427,7 @@ func (v VaultScreen) viewEntry() string {
 	}
 
 	b.WriteString(labelStyle.Render("Updated:"))
-	b.WriteString(entry.UpdatedAt.Format("2001-02-03 14:05"))
+	b.WriteString(entry.UpdatedAt.Format("2006-01-02 15:04"))
 	b.WriteString("\n")
 
 	b.WriteString("\n")
