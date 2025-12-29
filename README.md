@@ -96,6 +96,6 @@ forgor.exe      # Windows
 - [BubbleTea](https://github.com/charmbracelet/bubbletea) - TUI framework
 - [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
 - [Lipgloss](https://github.com/charmbracelet/lipgloss) - Styling
-- [BoltDB](https://go.etcd.io/bbolt) - Embedded database
+- [BoltDB](https://github.com/etcd-io/bbolt) - Embedded database
 - [hashicorp/mdns](https://github.com/hashicorp/mdns) - mDNS discovery
 - [x/crypto](https://pkg.go.dev/golang.org/x/crypto) - Argon2, ChaCha20, NaCl

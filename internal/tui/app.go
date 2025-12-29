@@ -332,6 +332,21 @@ func (a *App) handlePairing(peer models.Peer) tea.Cmd {
 			addr = fmt.Sprintf("%s:%d", peer.Host, peer.Port)
 		}
 
+		emptyKey := [32]byte{}
+		if peer.PubKey == emptyKey {
+			if addr == "" {
+				return PairingFailMsg{Err: fmt.Errorf("cannot verify peer: no address available")}
+			}
+			verifiedPeer, err := server.FetchAndPair(addr)
+			if err != nil {
+				return PairingFailMsg{Err: fmt.Errorf("failed to verify peer: %w", err)}
+			}
+			if verifiedPeer.Fingerprint != peer.Fingerprint {
+				return PairingFailMsg{Err: fmt.Errorf("fingerprint mismatch - possible spoofing")}
+			}
+			peer.PubKey = verifiedPeer.PubKey
+		}
+
 		friend := models.Friend{
 			Fingerprint: peer.Fingerprint,
 			Name:        peer.Name,
