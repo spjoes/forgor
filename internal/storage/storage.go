@@ -221,7 +221,7 @@ func (s *Store) GetDevice() (*models.Device, error) {
 		}
 
 		pubKeyBytes := meta.Get(keyDevicePubKey)
-		if pubKeyBytes != nil && len(pubKeyBytes) == 32 {
+		if len(pubKeyBytes) == 32 {
 			copy(device.PubKey[:], pubKeyBytes)
 		}
 
