@@ -1,0 +1,100 @@
+# Forgor - HackClub Password Manager with LAN Sharing
+
+A terminal-based password manager written in Go with a unique feature: secure end-to-end encrypted password sharing between nearby devices on your network.
+
+## Features
+
+Your vault is encrypted with Argon2id + XChaCha20-Poly1305
+
+### Nearby Device Sharing
+- **mDNS based Discovery** - Automatically find other **Forgor** instances on your LAN
+- **Fingerprint Pairing** - Verify the devices you connect to before trusting them
+- **E2E Encrypted Sharing** - Share entries using NaCl box (public-key encryption)
+- **Accept/Decline** - Full control and transparency over incoming shares.
+- **Manual Fallback** - When mDNS fails, you can still add devices via IP
+
+## Installation
+
+### Prerequisites
+- Go 1.21 or later
+
+### Build from source
+```bash
+git clone https://github.com/spjoes/forgor
+cd forgor
+go build .
+```
+
+### Run
+```bash
+./forgor        # Linux/macOS
+forgor.exe      # Windows
+```
+
+## Usage
+
+### First Run
+1. Launch Forgor
+2. Set your master password (minimum 8 characters)
+3. Name your device (e.g., "laptop", "desktop")
+
+### Vault Tab (1)
+- `↑/↓` or `j/k` - Navigate entries
+- `Enter` - View entry details
+- `a` - Add new entry
+- `e` - Edit entry
+- `d` - Delete entry
+- `/` - Search
+- `u` - Copy username
+- `c` - Copy password
+- `p` - Toggle password visibility
+
+### Nearby Tab (2)
+- See devices running Forgor on your network
+- `Enter` or `p` - Initiate pairing
+- `m` - Add device manually by IP
+- `r` - Refresh discovery
+
+### Friends Tab (3)
+- View paired devices
+- `s` - Share selected entry (select in Vault first)
+- `d` - Remove friend
+
+### Global Keys
+- `1/2/3` or `Tab` - Switch tabs
+- `Ctrl+L` - Lock vault
+- `Ctrl+C` - Quit
+
+## Security
+
+- **KDF**: Argon2id (3 iterations, 64MB memory, 4 threads)
+- **Vault Encryption**: XChaCha20-Poly1305 (authenticated encryption)
+- **Device-to-Device**: NaCl box (Curve25519 + XSalsa20-Poly1305)
+- **Storage**: Single encrypted blob in BoltDB (no plaintext on disk)
+
+## Data Storage
+
+> Please note: these are the default database locations. This location can be changed via command arguments when running Forgor
+
+| Platform | Location |
+|----------|----------|
+| Windows  | `%APPDATA%\forgor\vault.db` |
+| macOS    | `~/Library/Application Support/forgor/vault.db` |
+| Linux    | `~/.local/share/forgor/vault.db` |
+
+## Network
+> Please note: port 8765 is the default port. This port can be changed via command arguments when running Forgor
+
+- **mDNS Service**: `_pwshare._tcp` on port 8765
+- **HTTP Endpoints**:
+  - `GET /whoami` - Device info for pairing
+  - `POST /share` - Receive encrypted entry
+
+## Dependencies
+
+- [BubbleTea](https://github.com/charmbracelet/bubbletea) - TUI framework
+- [Bubbles](https://github.com/charmbracelet/bubbles) - TUI components
+- [Lipgloss](https://github.com/charmbracelet/lipgloss) - Styling
+- [BoltDB](https://go.etcd.io/bbolt) - Embedded database
+- [hashicorp/mdns](https://github.com/hashicorp/mdns) - mDNS discovery
+- [x/crypto](https://pkg.go.dev/golang.org/x/crypto) - Argon2, ChaCha20, NaCl
