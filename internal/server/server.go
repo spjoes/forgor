@@ -3,11 +3,13 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"forgor/internal/crypto"
@@ -20,13 +22,16 @@ type Server struct {
 	store      *storage.Store
 	shareChan  chan models.IncomingShare
 	port       int
+	seenNonces map[string]bool
+	nonceMu    sync.Mutex
 }
 
 func New(store *storage.Store, shareChan chan models.IncomingShare, port int) *Server {
 	return &Server{
-		store:     store,
-		shareChan: shareChan,
-		port:      port,
+		store:      store,
+		shareChan:  shareChan,
+		port:       port,
+		seenNonces: make(map[string]bool),
 	}
 }
 
@@ -117,6 +122,20 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
+
+	if len(shareMsg.Ciphertext) < 24 {
+		http.Error(w, "Invalid ciphertext", http.StatusBadRequest)
+		return
+	}
+	nonceHex := hex.EncodeToString(shareMsg.Ciphertext[:24])
+	s.nonceMu.Lock()
+	if s.seenNonces[nonceHex] {
+		s.nonceMu.Unlock()
+		http.Error(w, "Replay detected", http.StatusConflict)
+		return
+	}
+	s.seenNonces[nonceHex] = true
+	s.nonceMu.Unlock()
 
 	friend, err := s.store.GetFriend(shareMsg.FromFingerprint)
 	if err != nil {
