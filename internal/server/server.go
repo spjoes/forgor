@@ -22,16 +22,21 @@ type Server struct {
 	store      *storage.Store
 	shareChan  chan models.IncomingShare
 	port       int
-	seenNonces map[string]bool
+	seenNonces map[string]int64
 	nonceMu    sync.Mutex
 }
+
+const (
+	maxSeenNonces = 1000
+	nonceTTL      = 5 * time.Minute
+)
 
 func New(store *storage.Store, shareChan chan models.IncomingShare, port int) *Server {
 	return &Server{
 		store:      store,
 		shareChan:  shareChan,
 		port:       port,
-		seenNonces: make(map[string]bool),
+		seenNonces: make(map[string]int64),
 	}
 }
 
@@ -127,15 +132,7 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid ciphertext", http.StatusBadRequest)
 		return
 	}
-	nonceHex := hex.EncodeToString(shareMsg.Ciphertext[:24])
-	s.nonceMu.Lock()
-	if s.seenNonces[nonceHex] {
-		s.nonceMu.Unlock()
-		http.Error(w, "Replay detected", http.StatusConflict)
-		return
-	}
-	s.seenNonces[nonceHex] = true
-	s.nonceMu.Unlock()
+	nonceKey := shareMsg.FromFingerprint + ":" + hex.EncodeToString(shareMsg.Ciphertext[:24])
 
 	friend, err := s.store.GetFriend(shareMsg.FromFingerprint)
 	if err != nil {
@@ -148,6 +145,37 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Decryption failed", http.StatusBadRequest)
 		return
 	}
+
+	now := time.Now().Unix()
+	s.nonceMu.Lock()
+	defer s.nonceMu.Unlock()
+
+	if seenTime, exists := s.seenNonces[nonceKey]; exists && (now-seenTime) < int64(nonceTTL.Seconds()) {
+		http.Error(w, "Replay detected", http.StatusConflict)
+		return
+	}
+
+	if len(s.seenNonces) >= maxSeenNonces {
+		cutoff := now - int64(nonceTTL.Seconds())
+		for k, v := range s.seenNonces {
+			if v < cutoff {
+				delete(s.seenNonces, k)
+			}
+		}
+		if len(s.seenNonces) >= maxSeenNonces {
+			var oldest string
+			var oldestTime int64 = now + 1
+			for k, v := range s.seenNonces {
+				if v < oldestTime {
+					oldest = k
+					oldestTime = v
+				}
+			}
+			delete(s.seenNonces, oldest)
+		}
+	}
+
+	s.seenNonces[nonceKey] = now
 
 	var entry models.Entry
 	if err := json.Unmarshal(plaintext, &entry); err != nil {
