@@ -1,4 +1,5 @@
 # Forgor - HackClub Password Manager with LAN Sharing
+> Please note: this project was made for HackClub's "HackVault" and is experimental software. While no data leaves your device without your approval, all on-device data is encrypted, and all outgoing connections are E2E encrypted, you are liable for any passwords you choose to store with Forgor.
 
 A terminal-based password manager written in Go with a unique feature: secure end-to-end encrypted password sharing between nearby devices on your network.
 

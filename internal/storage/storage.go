@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"forgor/internal/crypto"
 	"forgor/internal/models"
@@ -31,6 +32,7 @@ type Store struct {
 	db       *bolt.DB
 	dbPath   string
 	vaultKey []byte
+	mu       sync.RWMutex
 }
 
 func Open(dbPath string) (*Store, error) {
@@ -170,11 +172,15 @@ func (s *Store) Unlock(masterPassword string) ([]models.Entry, error) {
 		return nil, fmt.Errorf("failed to parse vault: %w", err)
 	}
 
+	s.mu.Lock()
 	s.vaultKey = vaultKey
+	s.mu.Unlock()
 	return entries, nil
 }
 
 func (s *Store) Lock() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for i := range s.vaultKey {
 		s.vaultKey[i] = 0
 	}
@@ -182,20 +188,28 @@ func (s *Store) Lock() {
 }
 
 func (s *Store) IsUnlocked() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.vaultKey != nil
 }
 
 func (s *Store) SaveEntries(entries []models.Entry) error {
+	s.mu.RLock()
 	if s.vaultKey == nil {
+		s.mu.RUnlock()
 		return fmt.Errorf("vault is locked")
 	}
+	// Copy the key bytes, not just the slice header
+	vaultKey := make([]byte, len(s.vaultKey))
+	copy(vaultKey, s.vaultKey)
+	s.mu.RUnlock()
 
 	plaintext, err := json.Marshal(entries)
 	if err != nil {
 		return fmt.Errorf("failed to serialize entries: %w", err)
 	}
 
-	ciphertext, err := crypto.Encrypt(s.vaultKey, plaintext)
+	ciphertext, err := crypto.Encrypt(vaultKey, plaintext)
 	if err != nil {
 		return err
 	}
@@ -207,9 +221,14 @@ func (s *Store) SaveEntries(entries []models.Entry) error {
 }
 
 func (s *Store) GetDevice() (*models.Device, error) {
+	s.mu.RLock()
 	if s.vaultKey == nil {
+		s.mu.RUnlock()
 		return nil, fmt.Errorf("vault is locked")
 	}
+	vaultKey := make([]byte, len(s.vaultKey))
+	copy(vaultKey, s.vaultKey)
+	s.mu.RUnlock()
 
 	var device models.Device
 	err := s.db.View(func(tx *bolt.Tx) error {
@@ -227,7 +246,7 @@ func (s *Store) GetDevice() (*models.Device, error) {
 
 		privKeyEnc := meta.Get(keyDevicePrivKeyEnc)
 		if privKeyEnc != nil {
-			privKeyPlain, err := crypto.Decrypt(s.vaultKey, privKeyEnc)
+			privKeyPlain, err := crypto.Decrypt(vaultKey, privKeyEnc)
 			if err != nil {
 				return fmt.Errorf("failed to decrypt device private key: %w", err)
 			}

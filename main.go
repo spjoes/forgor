@@ -66,7 +66,7 @@ func main() {
 				}
 
 				srv = server.New(store, shareChan, *portFlag)
-				if err := srv.Start(device); err != nil {
+				if err := srv.Start(); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: Failed to start server: %v\n", err)
 				}
 

@@ -18,7 +18,6 @@ import (
 type Server struct {
 	httpServer *http.Server
 	store      *storage.Store
-	device     *models.Device
 	shareChan  chan models.IncomingShare
 	port       int
 }
@@ -31,9 +30,7 @@ func New(store *storage.Store, shareChan chan models.IncomingShare, port int) *S
 	}
 }
 
-func (s *Server) Start(device *models.Device) error {
-	s.device = device
-
+func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", s.handleWhoAmI)
 	mux.HandleFunc("/share", s.handleShare)
@@ -78,15 +75,17 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.device == nil {
-		http.Error(w, "Device not ready", http.StatusServiceUnavailable)
+	// Fetch device fresh from store (fails if locked)
+	device, err := s.store.GetDevice()
+	if err != nil {
+		http.Error(w, "Vault is locked", http.StatusServiceUnavailable)
 		return
 	}
 
 	response := models.WhoAmIResponse{
-		DeviceName:  s.device.Name,
-		PubKey:      s.device.PubKey,
-		Fingerprint: s.device.Fingerprint(),
+		DeviceName:  device.Name,
+		PubKey:      device.PubKey,
+		Fingerprint: device.Fingerprint(),
 		Version:     "1",
 	}
 
@@ -100,8 +99,10 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.device == nil {
-		http.Error(w, "Device not ready", http.StatusServiceUnavailable)
+	// Fetch device fresh from store (fails if locked - this is the atomic check)
+	device, err := s.store.GetDevice()
+	if err != nil {
+		http.Error(w, "Vault is locked", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -123,7 +124,7 @@ func (s *Server) handleShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plaintext, err := crypto.BoxOpen(shareMsg.Ciphertext, &friend.PubKey, &s.device.PrivKey)
+	plaintext, err := crypto.BoxOpen(shareMsg.Ciphertext, &friend.PubKey, &device.PrivKey)
 	if err != nil {
 		http.Error(w, "Decryption failed", http.StatusBadRequest)
 		return
