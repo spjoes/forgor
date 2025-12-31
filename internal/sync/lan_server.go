@@ -306,7 +306,7 @@ func (s *LANServer) getLocalMemberEvents(vaultID UUID, sinceSeq uint64) ([]Membe
 func (s *LANServer) storeEvent(event *Event) (uint64, error) {
 	// Store the event locally and return a sequence number
 	// For LAN sync, we're just gonna use the lamport timestamp as a pseudo-sequence
-	// A full implementation would store events in BoltDB (bbolt in GoLang)
+	// the full implementation will store events in BoltDB (bbolt in GoLang)
 	return uint64(event.Lamport), nil
 }
 

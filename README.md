@@ -14,6 +14,13 @@ Your vault is encrypted with Argon2id + XChaCha20-Poly1305
 - **Accept/Decline** - Full control and transparency over incoming shares.
 - **Manual Fallback** - When mDNS fails, you can still add devices via IP
 
+### Cloud Sync (Requires a **Forgor Coordination Server**)
+- **Self-hosted Sync** - Create or join a vault via a selfhosted coordination server
+- **End-to-End Encrypted** - The server never sees plaintext vault data
+- **Device Invites** - Invite devices using their 64-hex Device ID
+- **Owner Approval** - After a device joins, the owner should run Sync Now once to accept the invite claim
+- **Share Carefully** - Invite codes grant access to your vault. Only people on the same coordination server can connect to the same vault
+
 ## Installation
 
 ### Prerequisites
@@ -61,8 +68,24 @@ forgor.exe      # Windows
 - `s` - Share selected entry (select in Vault first)
 - `d` - Remove friend
 
+### Sync Tab (4)
+- `Enter` - Select action (Setup Sync, Sync Now, Invite Device, Leave Vault)
+- `y` - Copy your Device ID
+- `c` - Create a new sync vault (on Setup screen)
+- `j` - Join an existing vault (on Setup screen)
+- `g` - Generate an invite code (on Invite screen)
+- `i` - Copy invite code (on Invite screen)
+
+### Cloud Sync Setup (Requires a Coordination Server)
+1. Host a [coordination server](https://github.com/spjoes/forgor-server)
+2. Open the Sync tab in your client, select Setup Sync, and enter the server URL
+3. Press `c` to create a new vault, or `j` to join using an invite code
+4. To invite another device, open Invite Device and enter the target Device ID (shown on that device's Sync tab)
+5. The invited device clicks "Setup Sync", enters the coordination server's URL, clicks "j", and enters the invite code given by the owner client
+6. The owner runs Sync Now once to accept the invite claim
+
 ### Global Keys
-- `1/2/3` or `Tab` - Switch tabs
+- `1/2/3/4` or `Tab` - Switch tabs
 - `Ctrl+L` - Lock vault
 - `Ctrl+C` - Quit
 
