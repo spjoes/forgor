@@ -1,7 +1,10 @@
 package tui
 
-import "forgor/internal/models"
+import (
+	"time"
 
+	"forgor/internal/models"
+)
 
 type UnlockSuccessMsg struct {
 	Entries []models.Entry
@@ -50,8 +53,24 @@ type ShareFailMsg struct {
 }
 
 type CopyToClipboardMsg struct {
-	Text    string
-	Label   string
+	Text  string
+	Label string
+}
+
+type SyncPushEntryMsg struct {
+	Entry models.Entry
+	Op    string
+}
+
+type SyncNowCompleteMsg struct {
+	Entries  []models.Entry
+	LastSync time.Time
+	Members  int
+	Warning  error
+}
+
+type SyncNowFailMsg struct {
+	Err error
 }
 
 type StatusMsg struct {

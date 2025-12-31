@@ -395,3 +395,13 @@ func copyBytes(b []byte) []byte {
 	copy(c, b)
 	return c
 }
+
+func (s *Store) GetDB() *bolt.DB {
+	return s.db
+}
+
+func (s *Store) GetVaultKey() []byte {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return copyBytes(s.vaultKey)
+}

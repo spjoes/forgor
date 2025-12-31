@@ -202,9 +202,14 @@ func (v VaultScreen) updateDelete(msg tea.KeyMsg) (VaultScreen, tea.Cmd) {
 				v.cursor--
 			}
 			v.mode = modeList
-			return v, func() tea.Msg {
-				return SaveEntriesMsg{Entries: v.entries}
-			}
+			return v, tea.Batch(
+				func() tea.Msg {
+					return SaveEntriesMsg{Entries: v.entries}
+				},
+				func() tea.Msg {
+					return SyncPushEntryMsg{Entry: entryToDelete, Op: "delete"}
+				},
+			)
 		}
 	case "n", "N", "esc":
 		v.mode = modeView
@@ -273,9 +278,11 @@ func (v VaultScreen) saveEntry() (VaultScreen, tea.Cmd) {
 		}
 	}
 
+	var pushedEntry models.Entry
 	if v.mode == modeAdd {
 		entry := models.NewEntry(website, username, password, notes, tags)
 		v.entries = append(v.entries, entry)
+		pushedEntry = entry
 	} else {
 		for i, e := range v.entries {
 			if e.ID == v.editEntry.ID {
@@ -285,6 +292,7 @@ func (v VaultScreen) saveEntry() (VaultScreen, tea.Cmd) {
 				v.entries[i].Notes = notes
 				v.entries[i].Tags = tags
 				v.entries[i].UpdatedAt = time.Now()
+				pushedEntry = v.entries[i]
 				break
 			}
 		}
@@ -293,9 +301,14 @@ func (v VaultScreen) saveEntry() (VaultScreen, tea.Cmd) {
 	v.filterEntries()
 	v.mode = modeList
 
-	return v, func() tea.Msg {
-		return SaveEntriesMsg{Entries: v.entries}
-	}
+	return v, tea.Batch(
+		func() tea.Msg {
+			return SaveEntriesMsg{Entries: v.entries}
+		},
+		func() tea.Msg {
+			return SyncPushEntryMsg{Entry: pushedEntry, Op: "upsert"}
+		},
+	)
 }
 
 func (v *VaultScreen) filterEntries() {

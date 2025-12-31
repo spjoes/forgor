@@ -1,7 +1,10 @@
 package crypto
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -113,4 +116,36 @@ func BoxOpen(ciphertext []byte, senderPub, recipientPriv *[32]byte) ([]byte, err
 	}
 
 	return plaintext, nil
+}
+
+func GenerateSignKeyPair() (pub [32]byte, priv [64]byte, err error) {
+	pubSlice, privSlice, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return pub, priv, fmt.Errorf("failed to generate signing key pair: %w", err)
+	}
+	copy(pub[:], pubSlice)
+	copy(priv[:], privSlice)
+	return pub, priv, nil
+}
+
+func Sign(privateKey [64]byte, message []byte) []byte {
+	return ed25519.Sign(privateKey[:], message)
+}
+
+func Verify(publicKey [32]byte, message, signature []byte) bool {
+	return ed25519.Verify(publicKey[:], message, signature)
+}
+
+func ComputeDeviceID(pubkeySign [32]byte) string {
+	hash := sha256.Sum256(pubkeySign[:])
+	return hex.EncodeToString(hash[:])
+}
+
+func DeviceIDBytes(pubkeySign [32]byte) []byte {
+	hash := sha256.Sum256(pubkeySign[:])
+	return hash[:]
+}
+
+func DeviceIDToBytes(hexID string) ([]byte, error) {
+	return hex.DecodeString(hexID)
 }
