@@ -36,6 +36,8 @@ type VaultScreen struct {
 	statusIsError bool
 	width         int
 	height        int
+	schemeCutover *time.Time
+	schemeByID    map[string]string
 }
 
 func NewVaultScreen(entries []models.Entry) VaultScreen {
@@ -55,6 +57,14 @@ func NewVaultScreen(entries []models.Entry) VaultScreen {
 func (v *VaultScreen) SetEntries(entries []models.Entry) {
 	v.entries = entries
 	v.filterEntries()
+}
+
+func (v *VaultScreen) SetSchemeCutover(cutover time.Time) {
+	v.schemeCutover = &cutover
+}
+
+func (v *VaultScreen) SetEntrySchemes(schemes map[string]string) {
+	v.schemeByID = schemes
 }
 
 func (v VaultScreen) Init() tea.Cmd {
@@ -391,6 +401,7 @@ func (v VaultScreen) viewList() string {
 			if entry.Username != "" {
 				line += mutedStyle.Render(" (" + entry.Username + ")")
 			}
+			line += " " + v.renderSchemeBadge(entry)
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
@@ -400,6 +411,20 @@ func (v VaultScreen) viewList() string {
 	b.WriteString(helpStyle.Render("↑/↓ navigate • enter view • a add • / search • q quit"))
 
 	return b.String()
+}
+
+func (v VaultScreen) renderSchemeBadge(entry models.Entry) string {
+	scheme := "legacy"
+	if v.schemeByID != nil {
+		if val, ok := v.schemeByID[entry.ID]; ok && val != "" {
+			scheme = val
+		}
+	}
+
+	if scheme == "v2" {
+		return v2BadgeStyle.Render("V2")
+	}
+	return legacyBadgeStyle.Render("LEGACY")
 }
 
 func (v VaultScreen) viewEntry() string {

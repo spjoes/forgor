@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
+	"golang.org/x/crypto/nacl/secretbox"
 )
 
 type Engine struct {
@@ -694,6 +695,12 @@ func (e *Engine) PushEntry(entry models.Entry, op string) error {
 		return fmt.Errorf("failed to update event head: %w", err)
 	}
 
+	if op == "upsert" {
+		_ = e.state.SetEntryScheme(entry.ID, "v2")
+	} else {
+		_ = e.state.RemoveEntryScheme(entry.ID)
+	}
+
 	return nil
 }
 
@@ -762,13 +769,18 @@ func (e *Engine) PullEvents() ([]models.Entry, error) {
 			continue
 		}
 
-		op, entry, err := e.decryptEventPayload(event.Ciphertext, event.Nonce, uint64(event.KeyEpoch))
+		op, entry, scheme, err := e.decryptEventPayload(event.Ciphertext, event.Nonce, uint64(event.KeyEpoch))
 		if err != nil {
 			continue
 		}
 
 		if op == "upsert" || op == "delete" {
 			updatedEntries = append(updatedEntries, entry)
+			if op == "upsert" {
+				_ = e.state.SetEntryScheme(entry.ID, scheme)
+			} else if op == "delete" {
+				_ = e.state.RemoveEntryScheme(entry.ID)
+			}
 		}
 
 		if uint64(event.Seq) > maxSeq {
@@ -863,7 +875,7 @@ func (e *Engine) SyncEntries(localEntries []models.Entry) ([]models.Entry, error
 			continue
 		}
 
-		op, entry, err := e.decryptEventPayload(event.Ciphertext, event.Nonce, uint64(event.KeyEpoch))
+		op, entry, scheme, err := e.decryptEventPayload(event.Ciphertext, event.Nonce, uint64(event.KeyEpoch))
 		if err != nil {
 			continue
 		}
@@ -879,6 +891,7 @@ func (e *Engine) SyncEntries(localEntries []models.Entry) ([]models.Entry, error
 				delete(entryMap, entry.ID)
 				entryLamport[entry.ID] = eventLamport
 				entryDeviceID[entry.ID] = eventDeviceID
+				_ = e.state.RemoveEntryScheme(entry.ID)
 			}
 		} else if op == "upsert" {
 			existingLamport, exists := entryLamport[entry.ID]
@@ -888,6 +901,7 @@ func (e *Engine) SyncEntries(localEntries []models.Entry) ([]models.Entry, error
 					entryMap[entry.ID] = entry
 					entryLamport[entry.ID] = eventLamport
 					entryDeviceID[entry.ID] = eventDeviceID
+					_ = e.state.SetEntryScheme(entry.ID, scheme)
 				}
 			}
 		}
@@ -964,25 +978,21 @@ func (e *Engine) encryptEventPayload(op string, entry models.Entry) (ciphertext,
 	return ciphertext, nonce, nil
 }
 
-func (e *Engine) decryptEventPayload(ciphertext, nonce []byte, keyEpoch uint64) (op string, entry models.Entry, err error) {
+func (e *Engine) decryptEventPayload(ciphertext, nonce []byte, keyEpoch uint64) (op string, entry models.Entry, scheme string, err error) {
 	vaultKey, err := e.state.GetVaultKey()
 	if err != nil {
-		return "", entry, fmt.Errorf("failed to get vault_key: %w", err)
+		return "", entry, "", fmt.Errorf("failed to get vault_key: %w", err)
 	}
 
-	eventKey, err := deriveEventKey(vaultKey[:], keyEpoch)
+	plaintext, err := decryptEventPayloadXChaCha(vaultKey[:], keyEpoch, nonce, ciphertext)
 	if err != nil {
-		return "", entry, fmt.Errorf("failed to derive event key: %w", err)
-	}
-
-	aead, err := chacha20poly1305.NewX(eventKey)
-	if err != nil {
-		return "", entry, fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", entry, fmt.Errorf("failed to decrypt: %w", err)
+		plaintext, err = decryptEventPayloadLegacy(vaultKey[:], keyEpoch, nonce, ciphertext)
+		if err != nil {
+			return "", entry, "", fmt.Errorf("failed to decrypt: %w", err)
+		}
+		scheme = "legacy"
+	} else {
+		scheme = "v2"
 	}
 
 	var payload struct {
@@ -991,10 +1001,46 @@ func (e *Engine) decryptEventPayload(ciphertext, nonce []byte, keyEpoch uint64) 
 	}
 
 	if err := json.Unmarshal(plaintext, &payload); err != nil {
-		return "", entry, fmt.Errorf("failed to unmarshal payload: %w", err)
+		return "", entry, "", fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	return payload.Op, payload.Entry, nil
+	return payload.Op, payload.Entry, scheme, nil
+}
+
+func decryptEventPayloadXChaCha(vaultKey []byte, keyEpoch uint64, nonce, ciphertext []byte) ([]byte, error) {
+	eventKey, err := deriveEventKey(vaultKey, keyEpoch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive event key: %w", err)
+	}
+
+	aead, err := chacha20poly1305.NewX(eventKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return plaintext, nil
+}
+
+func decryptEventPayloadLegacy(vaultKey []byte, keyEpoch uint64, nonce, ciphertext []byte) ([]byte, error) {
+	if len(nonce) != NonceLength {
+		return nil, fmt.Errorf("invalid nonce length")
+	}
+
+	legacyKey := deriveLegacyEventKey(vaultKey, keyEpoch)
+	var nonceArr [24]byte
+	copy(nonceArr[:], nonce)
+
+	plaintext, ok := secretbox.Open(nil, ciphertext, &nonceArr, &legacyKey)
+	if !ok {
+		return nil, fmt.Errorf("legacy decrypt failed")
+	}
+
+	return plaintext, nil
 }
 
 func (e *Engine) signEvent(event *Event) error {
@@ -1089,4 +1135,12 @@ func deriveEventKey(vaultKey []byte, keyEpoch uint64) ([]byte, error) {
 	}
 
 	return eventKey, nil
+}
+
+func deriveLegacyEventKey(vaultKey []byte, keyEpoch uint64) [32]byte {
+	info := fmt.Sprintf("forgor-event-key-epoch-%d", keyEpoch)
+	combined := make([]byte, 0, len(vaultKey)+len(info))
+	combined = append(combined, vaultKey...)
+	combined = append(combined, []byte(info)...)
+	return sha256.Sum256(combined)
 }

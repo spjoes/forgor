@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"forgor/internal/crypto"
 	"forgor/internal/models"
@@ -22,6 +23,7 @@ var (
 	syncMembersBucket    = []byte("sync_members")
 	syncEventHeadsBucket = []byte("sync_event_heads")
 	syncPendingBucket    = []byte("sync_pending")
+	syncEntrySchemes     = []byte("sync_entry_schemes")
 
 	keyVaultID        = []byte("vault_id")
 	keyDeviceID       = []byte("device_id")
@@ -37,6 +39,7 @@ var (
 	keySyncCursor     = []byte("sync_cursor")
 	keyLamport        = []byte("lamport")
 	keyServerURL      = []byte("server_url")
+	keySchemeCutover  = []byte("scheme_cutover")
 )
 
 type DeviceKeys struct {
@@ -91,7 +94,7 @@ func NewSyncState(db *bolt.DB, vaultKey []byte) (*SyncState, error) {
 
 func (s *SyncState) initBuckets() error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		for _, bucket := range [][]byte{syncMetaBucket, syncMembersBucket, syncEventHeadsBucket, syncPendingBucket} {
+		for _, bucket := range [][]byte{syncMetaBucket, syncMembersBucket, syncEventHeadsBucket, syncPendingBucket, syncEntrySchemes} {
 			if _, err := tx.CreateBucketIfNotExists(bucket); err != nil {
 				return fmt.Errorf("failed to create bucket %s: %w", bucket, err)
 			}
@@ -498,6 +501,41 @@ func (s *SyncState) SetServerURL(url string) error {
 	})
 }
 
+func (s *SyncState) GetSchemeCutover() (*time.Time, error) {
+	var cutover *time.Time
+	err := s.db.View(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(syncMetaBucket)
+		data := meta.Get(keySchemeCutover)
+		if data == nil {
+			return nil
+		}
+		parsed, err := time.Parse(time.RFC3339, string(data))
+		if err != nil {
+			return nil
+		}
+		cutover = &parsed
+		return nil
+	})
+	return cutover, err
+}
+
+func (s *SyncState) EnsureSchemeCutover() (time.Time, error) {
+	existing, err := s.GetSchemeCutover()
+	if err != nil {
+		return time.Time{}, err
+	}
+	if existing != nil {
+		return *existing, nil
+	}
+
+	now := time.Now()
+	err = s.db.Update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(syncMetaBucket)
+		return meta.Put(keySchemeCutover, []byte(now.Format(time.RFC3339)))
+	})
+	return now, err
+}
+
 func (s *SyncState) GetVerifiedMembers() ([]VerifiedMember, error) {
 	var members []VerifiedMember
 	err := s.db.View(func(tx *bolt.Tx) error {
@@ -635,6 +673,76 @@ func (s *SyncState) ClearPendingEntries() error {
 	})
 }
 
+func (s *SyncState) SetEntryScheme(entryID, scheme string) error {
+	if entryID == "" {
+		return nil
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(syncEntrySchemes)
+		if bucket == nil {
+			return fmt.Errorf("entry schemes bucket not initialized")
+		}
+		return bucket.Put([]byte(entryID), []byte(scheme))
+	})
+}
+
+func (s *SyncState) RemoveEntryScheme(entryID string) error {
+	if entryID == "" {
+		return nil
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(syncEntrySchemes)
+		if bucket == nil {
+			return nil
+		}
+		return bucket.Delete([]byte(entryID))
+	})
+}
+
+func (s *SyncState) GetEntryScheme(entryID string) (string, error) {
+	if entryID == "" {
+		return "", nil
+	}
+	var scheme string
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(syncEntrySchemes)
+		if bucket == nil {
+			return nil
+		}
+		val := bucket.Get([]byte(entryID))
+		if val != nil {
+			scheme = string(val)
+		}
+		return nil
+	})
+	return scheme, err
+}
+
+func (s *SyncState) GetEntrySchemes() (map[string]string, error) {
+	schemes := make(map[string]string)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(syncEntrySchemes)
+		if bucket == nil {
+			return nil
+		}
+		return bucket.ForEach(func(k, v []byte) error {
+			schemes[string(k)] = string(v)
+			return nil
+		})
+	})
+	return schemes, err
+}
+
+func (s *SyncState) ClearEntrySchemes() error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.DeleteBucket(syncEntrySchemes); err != nil {
+			return err
+		}
+		_, err := tx.CreateBucket(syncEntrySchemes)
+		return err
+	})
+}
+
 func (s *SyncState) ClearEventHeads() error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(syncEventHeadsBucket)
@@ -678,6 +786,7 @@ func (s *SyncState) ClearVaultState() error {
 			keyMemberHeadHash,
 			keySyncCursor,
 			keyLamport,
+			keySchemeCutover,
 		}
 		for _, key := range keys {
 			if err := meta.Delete(key); err != nil {

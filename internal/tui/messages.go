@@ -62,6 +62,11 @@ type SyncPushEntryMsg struct {
 	Op    string
 }
 
+type SyncPushCompleteMsg struct {
+	LastSync time.Time
+	Schemes  map[string]string
+}
+
 type SyncNowCompleteMsg struct {
 	Entries  []models.Entry
 	LastSync time.Time

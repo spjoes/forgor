@@ -296,6 +296,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.syncScreen, _ = a.syncScreen.Update(msg)
 		return a, nil
 
+	case SyncPushCompleteMsg:
+		a.syncScreen, _ = a.syncScreen.Update(SyncStatusUpdateMsg{
+			Status:   "synced",
+			LastSync: msg.LastSync,
+		})
+		if msg.Schemes != nil {
+			a.vaultScreen.SetEntrySchemes(msg.Schemes)
+		}
+		return a, nil
+
 	case SyncNowCompleteMsg:
 		if err := a.store.SaveEntries(msg.Entries); err != nil {
 			a.syncScreen, _ = a.syncScreen.Update(SyncStatusUpdateMsg{Status: "error"})
@@ -303,6 +313,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.vaultScreen.SetEntries(msg.Entries)
+		if a.syncState != nil {
+			if schemes, err := a.syncState.GetEntrySchemes(); err == nil {
+				a.vaultScreen.SetEntrySchemes(schemes)
+			}
+		}
 		a.syncScreen, _ = a.syncScreen.Update(SyncStatusUpdateMsg{
 			Status:   "synced",
 			LastSync: msg.LastSync,
@@ -450,6 +465,13 @@ func (a *App) initSyncFromState() {
 
 	if vaultID, err := syncState.GetVaultID(); err == nil {
 		a.syncScreen.SetVaultID(vaultID.String())
+	}
+
+	if cutover, err := syncState.EnsureSchemeCutover(); err == nil {
+		a.vaultScreen.SetSchemeCutover(cutover)
+	}
+	if schemes, err := syncState.GetEntrySchemes(); err == nil {
+		a.vaultScreen.SetEntrySchemes(schemes)
 	}
 
 	serverURL, err := syncState.GetServerURL()
@@ -733,6 +755,9 @@ func (a *App) handleLeaveVault() tea.Cmd {
 		if err := syncState.ClearEventHeads(); err != nil {
 			return LeaveVaultFailMsg{Err: fmt.Errorf("failed to clear event heads: %w", err)}
 		}
+		if err := syncState.ClearEntrySchemes(); err != nil {
+			return LeaveVaultFailMsg{Err: fmt.Errorf("failed to clear entry schemes: %w", err)}
+		}
 		if err := syncState.ClearPendingEntries(); err != nil {
 			return LeaveVaultFailMsg{Err: fmt.Errorf("failed to clear pending changes: %w", err)}
 		}
@@ -881,6 +906,12 @@ func (a *App) handleSyncNow() tea.Cmd {
 			return SyncNowFailMsg{Err: err}
 		}
 
+		if rebuiltEntries, err := a.rebuildEntrySchemesIfMissing(newEntries); err != nil {
+			warnErr = mergeSyncWarning(warnErr, fmt.Errorf("failed to rebuild entry schemes: %w", err))
+		} else {
+			newEntries = rebuiltEntries
+		}
+
 		memberCount := 0
 		if members, err := a.syncState.GetVerifiedMembers(); err == nil {
 			memberCount = len(members)
@@ -903,6 +934,45 @@ func mergeSyncWarning(current error, next error) error {
 		return next
 	}
 	return fmt.Errorf("%v; %v", current.Error(), next.Error())
+}
+
+func (a *App) rebuildEntrySchemesIfMissing(entries []models.Entry) ([]models.Entry, error) {
+	if a.syncState == nil || a.syncEngine == nil {
+		return entries, nil
+	}
+	if len(entries) == 0 {
+		return entries, nil
+	}
+
+	schemes, err := a.syncState.GetEntrySchemes()
+	if err != nil {
+		return entries, err
+	}
+
+	pending, err := a.syncState.GetPendingEntries()
+	if err != nil {
+		return entries, err
+	}
+	if len(pending) > 0 {
+		return entries, nil
+	}
+
+	missing := false
+	for _, entry := range entries {
+		if schemes[entry.ID] == "" {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return entries, nil
+	}
+
+	if err := a.syncState.SetSyncCursor(0); err != nil {
+		return entries, err
+	}
+
+	return a.syncEngine.SyncEntries(entries)
 }
 
 func (a *App) seedLocalEntriesIfNeeded(entries []models.Entry) error {
@@ -993,9 +1063,14 @@ func (a *App) handleSyncPushEntry(entry models.Entry, op string) tea.Cmd {
 		}
 		_ = a.syncState.RemovePendingEntry(entry.ID)
 
-		return SyncStatusUpdateMsg{
-			Status:   "synced",
+		schemes, err := a.syncState.GetEntrySchemes()
+		if err != nil {
+			schemes = nil
+		}
+
+		return SyncPushCompleteMsg{
 			LastSync: time.Now(),
+			Schemes:  schemes,
 		}
 	}
 }

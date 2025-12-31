@@ -7,6 +7,7 @@ var (
 	primaryColor   = lipgloss.Color("#89b4fa")
 	secondaryColor = lipgloss.Color("#a6e3a1")
 	dangerColor    = lipgloss.Color("#f38ba8")
+	legacyColor    = lipgloss.Color("#fab387")
 	mutedColor     = lipgloss.Color("#6c7086")
 	bgColor        = lipgloss.Color("#1e1e2e")
 
@@ -65,6 +66,14 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(mutedColor).
 			MarginTop(1)
+
+	legacyBadgeStyle = lipgloss.NewStyle().
+				Foreground(legacyColor).
+				Bold(true)
+
+	v2BadgeStyle = lipgloss.NewStyle().
+			Foreground(secondaryColor).
+			Bold(true)
 
 	logoStyle = lipgloss.NewStyle().
 			Bold(true).
