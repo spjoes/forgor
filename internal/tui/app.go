@@ -197,6 +197,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SyncPushEntryMsg:
 		return a, a.handleSyncPushEntry(msg.Entry, msg.Op)
 
+	case RemoveDeviceMsg:
+		return a, a.handleRemoveDevice(msg.DeviceID)
+
 	case CopyToClipboardMsg:
 		return a, a.copyToClipboard(msg.Text, msg.Label)
 
@@ -317,6 +320,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if schemes, err := a.syncState.GetEntrySchemes(); err == nil {
 				a.vaultScreen.SetEntrySchemes(schemes)
 			}
+			a.refreshSyncMembers()
 		}
 		a.syncScreen, _ = a.syncScreen.Update(SyncStatusUpdateMsg{
 			Status:   "synced",
@@ -334,6 +338,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SyncNowFailMsg:
 		a.syncScreen, _ = a.syncScreen.Update(SyncStatusUpdateMsg{Status: "error"})
 		a.syncScreen, _ = a.syncScreen.Update(StatusMsg{Message: "Sync failed: " + msg.Err.Error(), IsError: true})
+		return a, nil
+
+	case RemoveDeviceCompleteMsg:
+		a.syncScreen.SetMembers(msg.Members)
+		a.syncScreen, _ = a.syncScreen.Update(SyncStatusUpdateMsg{
+			Status:   "synced",
+			LastSync: time.Now(),
+			Members:  len(msg.Members),
+		})
+		a.syncScreen, _ = a.syncScreen.Update(StatusMsg{Message: "Device removed", IsError: false})
+		return a, nil
+
+	case RemoveDeviceFailMsg:
+		a.syncScreen, _ = a.syncScreen.Update(StatusMsg{Message: "Remove device failed: " + msg.Err.Error(), IsError: true})
 		return a, nil
 
 	case InviteDeviceMsg:
@@ -473,6 +491,7 @@ func (a *App) initSyncFromState() {
 	if schemes, err := syncState.GetEntrySchemes(); err == nil {
 		a.vaultScreen.SetEntrySchemes(schemes)
 	}
+	a.refreshSyncMembers()
 
 	serverURL, err := syncState.GetServerURL()
 	if err != nil {
@@ -489,6 +508,29 @@ func (a *App) initSyncFromState() {
 	a.syncScreen.SetServerURL(serverURL)
 	if syncState.IsConfigured() {
 		a.syncScreen.SetConfigured(true)
+	}
+}
+
+func (a *App) refreshSyncMembers() {
+	if a.syncState == nil {
+		a.syncScreen.SetMembers(nil)
+		a.syncScreen.SetIsOwner(false)
+		return
+	}
+
+	members, err := a.syncState.GetVerifiedMembers()
+	if err == nil {
+		ids := make([]string, 0, len(members))
+		for _, member := range members {
+			ids = append(ids, string(member.DeviceID))
+		}
+		a.syncScreen.SetMembers(ids)
+	}
+
+	if isOwner, err := a.isSyncOwner(); err == nil {
+		a.syncScreen.SetIsOwner(isOwner)
+	} else {
+		a.syncScreen.SetIsOwner(false)
 	}
 }
 
@@ -875,6 +917,42 @@ func (a *App) handleInviteDevice(targetDeviceID string) tea.Cmd {
 		}
 
 		return InviteCreatedMsg{InviteCode: invite.InviteID.String()}
+	}
+}
+
+func (a *App) handleRemoveDevice(deviceID string) tea.Cmd {
+	return func() tea.Msg {
+		if a.syncState == nil || a.syncEngine == nil {
+			return RemoveDeviceFailMsg{Err: fmt.Errorf("sync not configured")}
+		}
+
+		deviceID = strings.TrimSpace(deviceID)
+		if deviceID == "" {
+			return RemoveDeviceFailMsg{Err: fmt.Errorf("device ID is required")}
+		}
+		if err := sync.DeviceID(deviceID).Validate(); err != nil {
+			return RemoveDeviceFailMsg{Err: fmt.Errorf("invalid device ID: %w", err)}
+		}
+
+		if err := a.syncEngine.RemoveMember(sync.DeviceID(deviceID)); err != nil {
+			return RemoveDeviceFailMsg{Err: err}
+		}
+
+		if err := a.syncEngine.RefreshMembership(); err != nil {
+			return RemoveDeviceFailMsg{Err: err}
+		}
+
+		members, err := a.syncState.GetVerifiedMembers()
+		if err != nil {
+			return RemoveDeviceFailMsg{Err: err}
+		}
+
+		ids := make([]string, 0, len(members))
+		for _, member := range members {
+			ids = append(ids, string(member.DeviceID))
+		}
+
+		return RemoveDeviceCompleteMsg{Members: ids}
 	}
 }
 

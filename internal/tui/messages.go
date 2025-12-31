@@ -67,6 +67,18 @@ type SyncPushCompleteMsg struct {
 	Schemes  map[string]string
 }
 
+type RemoveDeviceMsg struct {
+	DeviceID string
+}
+
+type RemoveDeviceCompleteMsg struct {
+	Members []string
+}
+
+type RemoveDeviceFailMsg struct {
+	Err error
+}
+
 type SyncNowCompleteMsg struct {
 	Entries  []models.Entry
 	LastSync time.Time

@@ -517,6 +517,86 @@ func (e *Engine) AcceptPendingInviteClaims() error {
 	return nil
 }
 
+func (e *Engine) RemoveMember(targetDeviceID DeviceID) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	keys, err := e.state.GetDeviceKeys()
+	if err != nil {
+		return fmt.Errorf("failed to get device keys: %w", err)
+	}
+
+	vaultID, err := e.state.GetVaultID()
+	if err != nil {
+		return fmt.Errorf("failed to get vault_id: %w", err)
+	}
+
+	ownerID, err := e.state.GetOwnerDeviceID()
+	if err != nil || ownerID != keys.DeviceID {
+		return fmt.Errorf("only the vault owner can remove devices")
+	}
+	if targetDeviceID == ownerID {
+		return fmt.Errorf("cannot remove the owner device")
+	}
+
+	memberHead, err := e.state.GetMembershipHead()
+	if err != nil {
+		return fmt.Errorf("failed to get membership head: %w", err)
+	}
+
+	memberEventID := NewUUID()
+	newMemberSeq := memberHead.MemberSeq + 1
+
+	actorDeviceIDBytes, err := keys.DeviceID.Bytes()
+	if err != nil {
+		return fmt.Errorf("failed to decode actor device_id: %w", err)
+	}
+	subjectDeviceIDBytes, err := targetDeviceID.Bytes()
+	if err != nil {
+		return fmt.Errorf("failed to decode subject device_id: %w", err)
+	}
+
+	signBytes, err := SignBytesMemberRemove(
+		memberEventID.Bytes(),
+		vaultID.Bytes(),
+		newMemberSeq,
+		memberHead.MemberHeadHash[:],
+		actorDeviceIDBytes,
+		subjectDeviceIDBytes,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to compute sign bytes: %w", err)
+	}
+
+	signature := crypto.Sign(keys.PrivkeySign, signBytes)
+
+	memberEvent := MemberEvent{
+		MsgType:         "member_remove",
+		MemberEventID:   memberEventID,
+		VaultID:         vaultID,
+		MemberSeq:       Uint64String(newMemberSeq),
+		PrevHash:        memberHead.MemberHeadHash[:],
+		ActorDeviceID:   keys.DeviceID,
+		SubjectDeviceID: targetDeviceID,
+		Signature:       signature,
+	}
+
+	if err := e.client.CreateMemberEvent(vaultID, memberEvent); err != nil {
+		return fmt.Errorf("failed to remove member: %w", err)
+	}
+
+	eventHash := sha256.Sum256(signBytes)
+	if err := e.state.SetMembershipHead(&MembershipHead{
+		MemberSeq:      newMemberSeq,
+		MemberHeadHash: eventHash,
+	}); err != nil {
+		return fmt.Errorf("failed to update membership head: %w", err)
+	}
+
+	_ = e.state.RemoveVerifiedMember(targetDeviceID)
+	return nil
+}
+
 func (e *Engine) RefreshMembership() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

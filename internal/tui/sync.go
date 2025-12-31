@@ -16,6 +16,8 @@ const (
 	syncModeSetup
 	syncModeInvite
 	syncModeAcceptInvite
+	syncModeManageDevices
+	syncModeConfirmRemove
 )
 
 type syncStatus string
@@ -42,6 +44,10 @@ type SyncScreen struct {
 	cursor            int
 	configured        bool
 	generatedInvite   string
+	members           []string
+	isOwner           bool
+	manageCursor      int
+	confirmRemoveID   string
 }
 
 func NewSyncScreen() SyncScreen {
@@ -155,6 +161,10 @@ func (s SyncScreen) Update(msg tea.Msg) (SyncScreen, tea.Cmd) {
 			return s.updateInvite(msg)
 		case syncModeAcceptInvite:
 			return s.updateAcceptInvite(msg)
+		case syncModeManageDevices:
+			return s.updateManageDevices(msg)
+		case syncModeConfirmRemove:
+			return s.updateRemoveConfirm(msg)
 		}
 	}
 
@@ -162,9 +172,10 @@ func (s SyncScreen) Update(msg tea.Msg) (SyncScreen, tea.Cmd) {
 }
 
 func (s SyncScreen) updateList(msg tea.KeyMsg) (SyncScreen, tea.Cmd) {
-	maxCursor := 0
-	if s.configured {
-		maxCursor = 3
+	options := s.listOptions()
+	maxCursor := len(options) - 1
+	if s.cursor > maxCursor {
+		s.cursor = maxCursor
 	}
 
 	switch msg.String() {
@@ -191,25 +202,110 @@ func (s SyncScreen) updateList(msg tea.KeyMsg) (SyncScreen, tea.Cmd) {
 			s.serverURL.Focus()
 			return s, textinput.Blink
 		}
-		switch s.cursor {
-		case 0:
+		switch options[s.cursor] {
+		case "Setup Sync":
 			s.mode = syncModeSetup
 			s.serverURL.Focus()
 			return s, textinput.Blink
-		case 1:
+		case "Sync Now":
 			return s, func() tea.Msg {
 				return SyncNowMsg{}
 			}
-		case 2:
+		case "Invite Device":
 			s.mode = syncModeInvite
 			s.generatedInvite = ""
 			s.targetFingerprint.Focus()
 			return s, textinput.Blink
-		case 3:
+		case "Manage Devices":
+			s.mode = syncModeManageDevices
+			s.manageCursor = 0
+			s.confirmRemoveID = ""
+			return s, nil
+		case "Leave Vault":
 			return s, func() tea.Msg {
 				return LeaveSyncVaultMsg{}
 			}
 		}
+	}
+	return s, nil
+}
+
+func (s SyncScreen) listOptions() []string {
+	if !s.configured {
+		return []string{"Setup Sync"}
+	}
+	options := []string{"Setup Sync", "Sync Now", "Invite Device"}
+	if s.isOwner {
+		options = append(options, "Manage Devices")
+	}
+	options = append(options, "Leave Vault")
+	return options
+}
+
+func (s SyncScreen) updateManageDevices(msg tea.KeyMsg) (SyncScreen, tea.Cmd) {
+	if len(s.members) == 0 {
+		s.manageCursor = 0
+	} else if s.manageCursor >= len(s.members) {
+		s.manageCursor = len(s.members) - 1
+	}
+
+	switch msg.String() {
+	case "esc":
+		s.mode = syncModeList
+		s.cursor = 0
+		s.confirmRemoveID = ""
+		return s, nil
+	case "up", "k":
+		if s.manageCursor > 0 {
+			s.manageCursor--
+		}
+	case "down", "j":
+		if s.manageCursor < len(s.members)-1 {
+			s.manageCursor++
+		}
+	case "y":
+		if len(s.members) == 0 {
+			s.statusMsg = "No devices to copy"
+			s.isError = true
+			return s, nil
+		}
+		deviceID := s.members[s.manageCursor]
+		return s, func() tea.Msg {
+			return CopyToClipboardMsg{Text: deviceID, Label: "Device ID"}
+		}
+	case "enter":
+		if len(s.members) == 0 {
+			return s, nil
+		}
+		deviceID := s.members[s.manageCursor]
+		if deviceID == s.deviceFingerprint {
+			s.statusMsg = "Cannot remove the current device"
+			s.isError = true
+			return s, nil
+		}
+		s.confirmRemoveID = deviceID
+		s.mode = syncModeConfirmRemove
+		return s, nil
+	}
+	return s, nil
+}
+
+func (s SyncScreen) updateRemoveConfirm(msg tea.KeyMsg) (SyncScreen, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		deviceID := s.confirmRemoveID
+		s.confirmRemoveID = ""
+		s.mode = syncModeManageDevices
+		if deviceID == "" {
+			return s, nil
+		}
+		return s, func() tea.Msg {
+			return RemoveDeviceMsg{DeviceID: deviceID}
+		}
+	case "n", "N", "esc":
+		s.confirmRemoveID = ""
+		s.mode = syncModeManageDevices
+		return s, nil
 	}
 	return s, nil
 }
@@ -349,6 +445,10 @@ func (s SyncScreen) View() string {
 		b.WriteString(s.viewInvite())
 	case syncModeAcceptInvite:
 		b.WriteString(s.viewAcceptInvite())
+	case syncModeManageDevices:
+		b.WriteString(s.viewManageDevices())
+	case syncModeConfirmRemove:
+		b.WriteString(s.viewConfirmRemove())
 	}
 
 	if s.statusMsg != "" {
@@ -412,7 +512,7 @@ func (s SyncScreen) viewList() string {
 
 		b.WriteString("\n")
 
-		options := []string{"Setup Sync", "Sync Now", "Invite Device", "Leave Vault"}
+		options := s.listOptions()
 		for i, opt := range options {
 			cursor := "  "
 			style := normalStyle
@@ -420,7 +520,7 @@ func (s SyncScreen) viewList() string {
 				cursor = "▸ "
 				style = selectedStyle
 			}
-			if i == 3 {
+			if opt == "Leave Vault" {
 				if s.cursor == i {
 					b.WriteString(fmt.Sprintf("%s%s\n", cursor, errorStyle.Render(opt)))
 				} else {
@@ -530,8 +630,73 @@ func (s SyncScreen) viewAcceptInvite() string {
 	return boxStyle.Render(b.String())
 }
 
+func (s SyncScreen) viewManageDevices() string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("Manage Devices"))
+	b.WriteString("\n\n")
+	b.WriteString(mutedStyle.Render("Only the vault owner can remove devices."))
+	b.WriteString("\n\n")
+
+	if len(s.members) == 0 {
+		b.WriteString(mutedStyle.Render("No devices found for this vault."))
+	} else {
+		for i, deviceID := range s.members {
+			cursor := "  "
+			style := normalStyle
+			if i == s.manageCursor {
+				cursor = ""
+				style = selectedStyle
+			}
+
+			label := formatDeviceID(deviceID)
+			if deviceID == s.deviceFingerprint {
+				if s.isOwner {
+					label += " (you, owner)"
+				} else {
+					label += " (you)"
+				}
+			}
+
+			b.WriteString(fmt.Sprintf("%s%s\n", cursor, style.Render(label)))
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("enter remove • y copy device id • esc back"))
+
+	return boxStyle.Render(b.String())
+}
+
+func (s SyncScreen) viewConfirmRemove() string {
+	var b strings.Builder
+
+	b.WriteString(errorStyle.Render("Remove Device?"))
+	b.WriteString("\n\n")
+
+	if s.confirmRemoveID != "" {
+		b.WriteString(fmt.Sprintf("Remove device %s from this vault?\n", formatDeviceID(s.confirmRemoveID)))
+	} else {
+		b.WriteString("Remove this device from the vault?\n")
+	}
+	b.WriteString("This will revoke its access and cannot be undone.\n\n")
+
+	b.WriteString(helpStyle.Render("y confirm • n cancel"))
+
+	return boxStyle.Render(b.String())
+}
+
 func (s *SyncScreen) SetDeviceFingerprint(fingerprint string) {
 	s.deviceFingerprint = fingerprint
+}
+
+func (s *SyncScreen) SetMembers(members []string) {
+	s.members = members
+	s.memberCount = len(members)
+}
+
+func (s *SyncScreen) SetIsOwner(isOwner bool) {
+	s.isOwner = isOwner
 }
 
 func (s *SyncScreen) SetConfigured(configured bool) {
@@ -548,6 +713,13 @@ func (s *SyncScreen) SetVaultID(vaultID string) {
 
 func (s SyncScreen) IsInputActive() bool {
 	return s.mode == syncModeSetup || s.mode == syncModeInvite || s.mode == syncModeAcceptInvite
+}
+
+func formatDeviceID(deviceID string) string {
+	if len(deviceID) <= 12 {
+		return deviceID
+	}
+	return fmt.Sprintf("%s...%s", deviceID[:6], deviceID[len(deviceID)-6:])
 }
 
 type SetupSyncMsg struct {
